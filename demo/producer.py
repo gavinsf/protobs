@@ -51,7 +51,7 @@ def set_version_fields(order):
         order.promo_code = rng.choice(["SPRING10", "VIP20"])
 
 
-def main():
+def send_orders():
     try:
         while True:
             order = make_order()
@@ -71,6 +71,10 @@ def main():
         pass
     finally:
         producer.flush(10)
+
+
+def main():
+    send_orders()
 
 
 if __name__ == "__main__":
