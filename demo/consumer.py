@@ -31,7 +31,7 @@ dlq = Producer(
 
 consumer.subscribe(["orders"])
 
-start_http_server(9090)
+start_http_server(9091)
 
 
 class ErrorMsg(Enum):
@@ -42,6 +42,9 @@ class ErrorMsg(Enum):
     BAD_CURRENCY = "bad currency"
     BAD_TIMESTAMP = "bad timestamp"
 
+
+for e in ErrorMsg:
+    bad.labels(e.value)
 
 VALID_CURRENCIES = ["CAD", "USD"]
 
@@ -75,16 +78,16 @@ def receive_orders():
             )
             reasons = validate(order)
         except Exception:
-            order, reasons = None, ErrorMsg.DECODE_ERROR
+            order, reasons = None, [ErrorMsg.DECODE_ERROR]
         if len(reasons) > 0:
             for reason in reasons:
-                bad.labels(reason).inc()
+                bad.labels(str(reason)).inc()
             dlq.produce(
                 "orders.dlq",
                 key=m.key(),
                 value=m.value(),
                 headers=[
-                    ("error", reasons.encode()),
+                    ("error", ",".join(r.value for r in reasons).encode()),
                     ("src-offset", str(m.offset()).encode()),
                 ],
             )
