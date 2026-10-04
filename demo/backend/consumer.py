@@ -31,7 +31,7 @@ dlq = Producer(
 
 consumer.subscribe(["orders"])
 
-start_http_server(9091)
+start_http_server(8080)
 
 
 class ErrorMsg(Enum):

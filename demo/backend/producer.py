@@ -11,7 +11,7 @@ from confluent_kafka.serialization import MessageField, SerializationContext
 
 VERSION = os.environ["SCHEMA_VERSION"]
 TOPIC = "orders"
-RATE = float(os.getenv("RATE_PER_SEC"), "20")
+RATE = float(os.getenv("RATE_PER_SEC", "20"))
 
 rng = random.Random(int(os.getenv("SEED", "1")))
 SKUS = [(f"SKU-{i:04d}", rng.randint(299, 19999)) for i in range(200)]
