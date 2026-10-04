@@ -1,5 +1,5 @@
 services:
-  redpanda: 
+  redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
     command:
       - redpanda start
@@ -19,39 +19,36 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-  
+
   producer:
-    build: .
-    command: python backend/producer.py
+    build:
+      context: .
+      dockerfile: demo/producer/Dockerfile
     environment:
       BOOTSTRAP: redpanda:9092
       REGISTRY_URL: http://redpanda:8081
       SCHEMA_VERSION: v1
-      PYTHONPATH: /app/gen/v1
-      RATE_PER_SEC: "20"
+      RATE_PER_SEC: "5"
       SEED: "1"
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
       redpanda:
         condition: service_healthy
-    
 
   consumer:
-    build: .
-    command: python backend/consumer.py
+    build:
+      context: .
+      dockerfile: demo/consumer/Dockerfile
     environment:
       BOOTSTRAP: redpanda:9092
-      ROLE: consumer
       GROUP_ID: demo-consumer
       SCHEMA_VERSION: v1
-      PYTHONPATH: /app/gen/v1
-      BOOTSTRAP_SERVERS: redpanda:9092
     ports:
       - "127.0.0.1:8081:8080"
     depends_on:
       redpanda:
         condition: service_healthy
-    
+
 volumes:
   redpanda-data: {}
