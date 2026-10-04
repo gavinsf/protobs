@@ -1,0 +1,17 @@
+syntax = "proto3";
+package shop;
+
+message LineItem {
+  string sku = 1;
+  int32 qty = 2;
+  int32 unit_price_cents = 3;
+}
+
+message OrderCreated {
+  string order_id = 1;
+  string customer_id = 2;
+  repeated LineItem items = 3;
+  int32 total_cents = 4;
+  string currency = 5;
+  int64 created_at_ms = 6;
+}
