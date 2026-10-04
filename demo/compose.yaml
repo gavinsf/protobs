@@ -1,0 +1,57 @@
+services:
+  redpanda: 
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    command:
+      - redpanda start
+      - --mode dev-container
+      - --smp 1
+      - --memory 1G
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    ports:
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:18081:18081"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  
+  producer:
+    build: .
+    command: python backend/producer.py
+    environment:
+      BOOTSTRAP: redpanda:9092
+      REGISTRY_URL: http://redpanda:8081
+      SCHEMA_VERSION: v1
+      PYTHONPATH: /app/gen/v1
+      RATE_PER_SEC: "20"
+      SEED: "1"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    
+
+  consumer:
+    build: .
+    command: python backend/consumer.py
+    environment:
+      BOOTSTRAP: redpanda:9092
+      ROLE: consumer
+      GROUP_ID: demo-consumer
+      SCHEMA_VERSION: v1
+      PYTHONPATH: /app/gen/v1
+      BOOTSTRAP_SERVERS: redpanda:9092
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    
+volumes:
+  redpanda-data: {}
