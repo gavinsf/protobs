@@ -11,6 +11,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 
 from confluent_kafka import (
     Consumer,
@@ -21,8 +22,16 @@ from confluent_kafka import (
 )
 
 from .config import Config
+from .kafka import build_consumer
 from .sink import PostgresSink
-from .wire import parse_frame
+from .wire import (
+    KEY_SCHEMA_ID_HEADER,
+    VALUE_SCHEMA_ID_HEADER,
+    ClassicFrame,
+    ConfluentFrameParser,
+    GuidFrame,
+    UnframedFrame,
+)
 
 log = logging.getLogger(__name__)
 
@@ -95,18 +104,6 @@ class Tap:
             self.resume_at = None
 
 
-def build_consumer(cfg: Config) -> Consumer:
-    conf = {
-        "bootstrap.servers": cfg.brokers,
-        "group.id": cfg.group_id,
-        "enable.auto.commit": False,
-        "auto.offset.reset": "latest",
-        "isolation.level": "read_committed",
-    }
-    # TODO Add SASL_SSL if cfg.sasl_username statement
-    return Consumer(conf)
-
-
 def headers_to_dict(headers) -> dict | None:
     dic = {}
     if not headers:
@@ -118,8 +115,22 @@ def headers_to_dict(headers) -> dict | None:
 
 def to_row(message: Message, cfg: Config) -> tuple:
     value = message.value() or b""
-    schema_id, indexes = parse_frame(value)
-    headers_dict = headers_to_dict(message.headers())
+    # key = message.key()
+    headers = message.headers()
+
+    value_frame = ConfluentFrameParser(value, headers, VALUE_SCHEMA_ID_HEADER).parse()
+    # Only the columns that apply to the frame variant are set; the rest are NULL.
+    schema_id = value_frame.schema_id if isinstance(value_frame, ClassicFrame) else None
+    schema_guid = value_frame.schema_guid if isinstance(value_frame, GuidFrame) else None
+    message_indexes = (
+        None if isinstance(value_frame, UnframedFrame) else value_frame.message_indexes
+    )
+    """ TODO Allow key frame handling
+    key_frame = (
+        ConfluentFrameParser(key, headers, KEY_SCHEMA_ID_HEADER) if key else None
+    )
+    """
+
     return (
         cfg.source,
         message.topic(),
@@ -127,11 +138,15 @@ def to_row(message: Message, cfg: Config) -> tuple:
         message.offset(),
         message.timestamp()[1],
         int(time.time() * 1000),
-        message.key(),
-        json.dumps(headers_dict),
+        json.dumps(headers_to_dict(headers)),
         value,
         schema_id,
-        indexes,
+        schema_guid,
+        message_indexes,
+        # key,
+        # key_frame.schema_id if key_frame else None,
+        # key_frame.schema_guid if key_frame else None,
+        # key_frame.message_indexes if key_frame else None,
         hashlib.sha256(value).digest(),
     )
 
