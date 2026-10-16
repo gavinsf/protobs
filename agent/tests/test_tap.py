@@ -230,11 +230,11 @@ def make_row(topic="orders", partition=0, offset=0) -> Row:
         offset=offset,
         kafka_ts=TS_MS,
         ingested_at=INGESTED_AT_MS,
-        headers="null",
+        headers=None,
         value=value,
         schema_id=42,
         schema_guid=None,
-        message_indexes=(0, 1),
+        message_indexes=[0, 1],
         value_sha256=hashlib.sha256(value).digest(),
     )
 
@@ -318,7 +318,7 @@ class TestToRow:
             value=value,  # stored whole, framing prefix included
             schema_id=42,
             schema_guid=None,
-            message_indexes=(0, 1),
+            message_indexes=[0, 1],
             value_sha256=hashlib.sha256(value).digest(),
         )
 
@@ -330,7 +330,7 @@ class TestToRow:
 
         assert row.schema_guid == GUID
         assert row.schema_id is None
-        assert row.message_indexes == (0,)
+        assert row.message_indexes == [0]
         assert row.value == b"payload"
 
     def test_unframed_value_has_no_schema_columns(self, cfg):
@@ -347,17 +347,27 @@ class TestToRow:
         assert row.value == b""
         assert row.value_sha256 == hashlib.sha256(b"").digest()
 
-    def test_missing_headers_serialise_as_json_null(self, cfg):
+    def test_missing_headers_are_stored_as_null(self, cfg):
         row = Row(*to_row(FakeMessage(headers=None), cfg))
 
-        assert row.headers == "null"
+        assert row.headers is None
 
-    def test_malformed_frame_propagates(self, cfg):
-        # to_row doesn't swallow errors; append_buf is what skips bad messages.
-        msg = FakeMessage(headers=[(VALUE_SCHEMA_ID_HEADER, b"\x09" + b"\x00" * 20)])
+    def test_malformed_frame_is_stored_unframed_and_logged(self, cfg, caplog):
+        # A frame the parser rejects must not lose the message: it is kept
+        # verbatim with no schema columns.
+        msg = FakeMessage(
+            value=b"payload",
+            headers=[(VALUE_SCHEMA_ID_HEADER, b"\x09" + b"\x00" * 20)],
+        )
 
-        with pytest.raises(ValueError, match="malformed guid header"):
-            to_row(msg, cfg)
+        with caplog.at_level(logging.WARNING, logger=tap_mod.log.name):
+            row = Row(*to_row(msg, cfg))
+
+        assert row.value == b"payload"
+        assert row.schema_id is None
+        assert row.schema_guid is None
+        assert row.message_indexes is None
+        assert "frame parse failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +574,7 @@ class TestTapFlush:
 
         assert sink.batches == [rows]
         kwargs = consumer.commit.call_args.kwargs
-        assert kwargs["asynchronous"] is False
+        assert kwargs["asynchronous"] is True
         assert as_tuples(kwargs["offsets"]) == [("orders", 0, 8)]
         assert tap.buf == []
 
@@ -587,14 +597,21 @@ class TestTapFlush:
         consumer.commit.assert_not_called()
         assert len(tap.buf) == 1
 
-    def test_commit_failure_keeps_buffer(self, tap, consumer, cfg):
+    def test_commit_failure_is_logged_and_does_not_undo_the_write(
+        self, tap, sink, consumer, caplog
+    ):
+        # The rows are already durable; a failed commit only means they may be
+        # re-read (and de-duplicated by the sink) after a restart.
         consumer.commit.side_effect = KafkaException(fatal_error())
-        tap.buf.append(make_row())
+        rows = [make_row()]
+        tap.buf.extend(rows)
 
-        with pytest.raises(KafkaException):
-            tap.flush()
+        with caplog.at_level(logging.WARNING, logger=tap_mod.log.name):
+            tap.flush()  # must not raise
 
-        assert len(tap.buf) == 1
+        assert sink.batches == [rows]
+        assert tap.buf == []
+        assert "offset commit failed" in caplog.text
 
 
 class TestTapClose:
@@ -605,14 +622,19 @@ class TestTapClose:
 
         assert events == ["write", "commit", "close"]
 
-    def test_closes_consumer_even_if_flush_fails(self, tap, sink, consumer, cfg):
+    def test_closes_consumer_even_if_flush_fails(
+        self, tap, sink, consumer, cfg, caplog
+    ):
         sink.write_error = RuntimeError("db down")
         tap.buf.append(make_row())
 
-        with pytest.raises(RuntimeError):
-            tap.close()
+        with caplog.at_level(logging.ERROR, logger=tap_mod.log.name):
+            tap.close()  # shutdown must not raise
 
         consumer.close.assert_called_once()
+        consumer.commit.assert_not_called()  # nothing was durable
+        assert len(tap.buf) == 1
+        assert "final flush failed, 1 buffered will be re-read" in caplog.text
 
 
 # ---------------------------------------------------------------------------
