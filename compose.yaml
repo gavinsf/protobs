@@ -50,5 +50,42 @@ services:
       redpanda:
         condition: service_healthy
 
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    environment:
+      PYTHONUNBUFFERED: "1"
+      CAPTURE_BROKERS: redpanda:9092
+      CAPTURE_BOOTSTRAP: redpanda:9092
+      CAPTURE_TOPICS: '["orders"]'
+      CAPTURE_GROUP_ID: capture-agent
+      CAPTURE_DATABASE_URL: postgresql://protobs_user:pass@postgres:5433/protobs
+    volumes:
+      - capture-data:/data
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    command: ["postgres", "-p", "5433"]
+    environment:
+      POSTGRES_USER: protobs_user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: protobs
+    volumes:
+    - pg-data:/var/lib/postgresql/data
+    ports:
+    - "127.0.0.1:5433:5433"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U protobs_user -d protobs -p 5433"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 volumes:
   redpanda-data: {}
+  capture-data: {}
+  pg-data: {}

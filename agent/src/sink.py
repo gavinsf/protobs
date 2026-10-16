@@ -14,12 +14,13 @@ _ROW_ERRORS = (psycopg.DataError, psycopg.IntegrityError)
 log = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
+SQL_DIR = HERE / "sql"
 
-SCHEMA = Path(HERE / "schema.sql").read_text()
-INSERT = Path(HERE / "insert.sql").read_text()
-ADD_PROGRESS = Path(HERE / "add_progress.sql").read_text()
-READ_PROGRESS = Path(HERE / "read_progress.sql").read_text()
-ADD_DEAD_LETTER = Path(HERE / "add_dead.sql").read_text()
+SCHEMA = (SQL_DIR / "schema.sql").read_text()
+INSERT = (SQL_DIR / "insert.sql").read_text()
+ADD_PROGRESS = (SQL_DIR / "add_progress.sql").read_text()
+READ_PROGRESS = (SQL_DIR / "read_progress.sql").read_text()
+ADD_DEAD_LETTER = (SQL_DIR / "add_dead.sql").read_text()
 
 
 class PostgresSink:
@@ -52,34 +53,36 @@ class PostgresSink:
         self.last_write_seconds = time.monotonic() - start
 
     def _write_dead(self, rows: list[tuple], progress_rows: list[tuple]) -> None:
-        failed: list[tuple[tuple, Exception]] = []
+        now_ms = int(time.time() * 1000)
+        # One transaction for the whole batch: the good rows, the dead letters and
+        # the progress update all commit together or not at all. Each row gets its
+        # own savepoint so one rejected row doesn't abort the rest.
         with self.conn.transaction(), self.conn.cursor() as cur:
             for row in rows:
                 try:
                     with self.conn.transaction():
                         cur.execute(INSERT, row)
                 except _ROW_ERRORS as exc:
-                    failed.append((row, exc))
-        now_ms = int(time.time() * 1000)
-        for row, ex in failed:
-            # row layout: source, topic, partition, offset, broker_ts_ms,
-            # captured_at_ms, headers, payload, ...
-            cur.execute(
-                ADD_DEAD_LETTER,
-                (
-                    row[0],
-                    row[1],
-                    row[2],
-                    row[3],
-                    row[4],
-                    now_ms,
-                    str(ex),
-                    row[6],
-                    row[7],
-                ),
-            )
-            log.error("dead-lettered %s[%d]@%d: %s", row[1], row[2], row[3], ex)
-        cur.executemany(ADD_PROGRESS, progress_rows)
+                    # row layout: source, topic, partition, offset, broker_ts_ms,
+                    # captured_at_ms, headers, payload, ...
+                    cur.execute(
+                        ADD_DEAD_LETTER,
+                        (
+                            row[0],
+                            row[1],
+                            row[2],
+                            row[3],
+                            row[4],
+                            now_ms,
+                            str(exc),
+                            row[6],
+                            row[7],
+                        ),
+                    )
+                    log.error(
+                        "dead-lettered %s[%d]@%d: %s", row[1], row[2], row[3], exc
+                    )
+            cur.executemany(ADD_PROGRESS, progress_rows)
 
     def is_slow(self) -> bool:
         return self.last_write_seconds > self.slow_after
